@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <title>Максимальные объемы в стакане Binance Futures</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      text-align: center;
+      background: #f9f9f9;
+      color: #222;
+    }
+    input, button {
+      padding: 8px 15px;
+      font-size: 16px;
+      margin: 5px;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+    }
+    button:hover {
+      cursor: pointer;
+      background-color: #eee;
+    }
+    table {
+      border-collapse: collapse;
+      margin: 20px auto;
+      width: 90%;
+      max-width: 700px;
+      text-align: right;
+      background: white;
+      box-shadow: 0 0 5px rgba(0,0,0,0.1);
+      border-radius: 5px;
+      overflow: hidden;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 8px 12px;
+    }
+    th {
+      background: #f0f0f0;
+      font-weight: 600;
+    }
+    caption {
+      font-weight: bold;
+      margin-bottom: 10px;
+      text-align: left;
+      font-size: 18px;
+      padding-left: 12px;
+    }
+    .highlight-bid {
+      background-color: #d0f5d0;
+    }
+    .highlight-ask {
+      background-color: #fddcdc;
+    }
+    .follow-btn {
+      text-align: center;
+    }
+    .tracked-table td, .tracked-table th {
+      text-align: center;
+    }
+    .disappeared {
+      color: red;
+      font-weight: bold;
+    }
+    #status {
+      margin-top: 10px;
+      font-weight: bold;
+      min-height: 20px;
+      color: #333;
+    }
+    /* Модальное окно */
+    #modalAlert {
+      display: none;
+      position: fixed;
+      z-index: 9999;
+      left: 0; top: 0; width: 100%; height: 100%;
+      background-color: rgba(0,0,0,0.6);
+      align-items: center;
+      justify-content: center;
+    }
+    #modalAlert > div {
+      background: white;
+      padding: 20px;
+      border-radius: 8px;
+      max-width: 400px;
+      margin: auto;
+      text-align: center;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+    }
+    #modalAlert h2 {
+      margin-top: 0;
+    }
+    #modalAlert button {
+      padding: 10px 20px;
+      font-size: 16px;
+      border: none;
+      background: #007bff;
+      color: white;
+      border-radius: 5px;
+      cursor: pointer;
+    }
+    #modalAlert button:hover {
+      background: #0056b3;
+    }
+  </style>
+</head>
+<body>
+
+<h2>Топ-5 ордеров с максимальным объемом (USDT)</h2>
+
+<label for="coinInput">Введите монету (например BTC): </label>
+<input type="text" id="coinInput" />
+<button onclick="loadOrderbook()">Загрузить</button>
+<button onclick="enableAlerts()">🔔 Включить оповещения</button>
+
+<audio id="alertSound" src="beep-01a.mp3" preload="auto"></audio>
+
+<div id="status"></div>
+<div id="result"></div>
+
+<h3>Отслеживаемые ордера:</h3>
+<table id="trackedOrdersTable" class="tracked-table"></table>
+
+<!-- Модальное окно -->
+<div id="modalAlert">
+  <div>
+    <h2>Внимание!</h2>
+    <p id="modalMessage" style="font-size: 18px; margin: 20px 0;"></p>
+    <button onclick="closeModal()">Закрыть</button>
+  </div>
+</div>
+
+<script>
+  let trackedOrders = [];
+  let monitorInterval = null;
+  let alertEnabled = false;
+
+  function formatVolume(v) {
+    return Math.floor(v).toLocaleString('ru-RU').replace(/,/g, ' ');
+  }
+
+  function saveTrackedOrders() {
+    localStorage.setItem('trackedOrders', JSON.stringify(trackedOrders));
+  }
+
+  function loadTrackedOrdersFromStorage() {
+    const saved = localStorage.getItem('trackedOrders');
+    if (saved) {
+      trackedOrders = JSON.parse(saved);
+    }
+  }
+
+  async function loadOrderbook() {
+    const coin = document.getElementById('coinInput').value.trim().toUpperCase();
+    if (!coin) {
+      alert('Введите монету');
+      return;
+    }
+
+    const symbol = coin + 'USDT';
+    localStorage.setItem('currentCoin', symbol);
+
+    const url = `https://fapi.binance.com/fapi/v1/depth?symbol=${symbol}&limit=500`;
+
+    document.getElementById('status').textContent = `Загружаем стакан ${symbol}...`;
+    document.getElementById('result').innerHTML = '';
+
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`Ошибка запроса: ${res.status}`);
+      const data = await res.json();
+
+      const bids = data.bids.map(([price, qty]) => {
+        const p = parseFloat(price);
+        const q = parseFloat(qty);
+        return { price, qty: q, volume: p * q };
+      });
+
+      const asks = data.asks.map(([price, qty]) => {
+        const p = parseFloat(price);
+        const q = parseFloat(qty);
+        return { price, qty: q, volume: p * q };
+      });
+
+      const topBids = bids.sort((a, b) => b.volume - a.volume).slice(0, 5).sort((a, b) => b.price - a.price);
+      const topAsks = asks.sort((a, b) => b.volume - a.volume).slice(0, 5).sort((a, b) => a.price - b.price);
+
+      const maxBidVolume = Math.max(...topBids.map(r => r.volume));
+      const maxAskVolume = Math.max(...topAsks.map(r => r.volume));
+
+      let html = `<table>
+        <caption>Топ-5 Bids (покупка)</caption>
+        <thead><tr><th>Цена</th><th>Кол-во</th><th>Объем (USDT)</th><th></th></tr></thead><tbody>`;
+
+      topBids.forEach(row => {
+        const highlight = row.volume === maxBidVolume ? ' class="highlight-bid"' : '';
+        html += `<tr${highlight}>
+          <td>${row.price}</td>
+          <td>${row.qty.toFixed(4)}</td>
+          <td>${formatVolume(row.volume)}</td>
+          <td class="follow-btn"><button onclick="followOrder('${symbol}', '${row.price}', ${row.qty})">Следить</button></td>
+        </tr>`;
+      });
+
+      html += `</tbody></table><br><table>
+        <caption>Топ-5 Asks (продажа)</caption>
+        <thead><tr><th>Цена</th><th>Кол-во</th><th>Объем (USDT)</th><th></th></tr></thead><tbody>`;
+
+      topAsks.forEach(row => {
+        const highlight = row.volume === maxAskVolume ? ' class="highlight-ask"' : '';
+        html += `<tr${highlight}>
+          <td>${row.price}</td>
+          <td>${row.qty.toFixed(4)}</td>
+          <td>${formatVolume(row.volume)}</td>
+          <td class="follow-btn"><button onclick="followOrder('${symbol}', '${row.price}', ${row.qty})">Следить</button></td>
+        </tr>`;
+      });
+
+      html += `</tbody></table>`;
+      document.getElementById('result').innerHTML = html;
+      document.getElementById('status').textContent = 'Готово';
+
+    } catch (err) {
+      document.getElementById('status').textContent = 'Ошибка: ' + err.message;
+    }
+  }
+
+  function followOrder(symbol, price, qty) {
+    if (trackedOrders.some(o => o.symbol === symbol && o.price === price)) return;
+    trackedOrders.push({ symbol, price, qty, status: 'активен' });
+    saveTrackedOrders();
+    renderTrackedOrders();
+  }
+
+  function renderTrackedOrders() {
+    const table = document.getElementById('trackedOrdersTable');
+    if (trackedOrders.length === 0) {
+      table.innerHTML = '<tr><td>Нет отслеживаемых ордеров.</td></tr>';
+      return;
+    }
+
+    let html = `<tr><th>Монета</th><th>Цена</th><th>Кол-во</th><th>Объем (USDT)</th><th>Статус</th><th>Действия</th></tr>`;
+    trackedOrders.forEach((o, i) => {
+      const rowClass = o.status === 'исчез' ? ' class="disappeared"' : '';
+      const volumeUSDT = o.qty * parseFloat(o.price);
+      html += `<tr${rowClass}>
+        <td>${o.symbol}</td>
+        <td>${o.price}</td>
+        <td>${o.qty.toFixed(4)}</td>
+        <td>${formatVolume(volumeUSDT)}</td>
+        <td>${o.status}</td>
+        <td><button onclick="removeTrackedOrder(${i})">Удалить</button></td>
+      </tr>`;
+    });
+
+    table.innerHTML = html;
+  }
+
+  function removeTrackedOrder(index) {
+    trackedOrders.splice(index, 1);
+    saveTrackedOrders();
+    renderTrackedOrders();
+  }
+
+  function showModal(message) {
+    const modal = document.getElementById('modalAlert');
+    const msgElem = document.getElementById('modalMessage');
+    msgElem.textContent = message;
+    modal.style.display = 'flex';
+  }
+
+  function closeModal() {
+    document.getElementById('modalAlert').style.display = 'none';
+  }
+
+  async function monitorOrders() {
+    for (const order of trackedOrders) {
+      try {
+        const url = `https://fapi.binance.com/fapi/v1/depth?symbol=${order.symbol}&limit=500`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          order.status = 'Ошибка';
+          continue;
+        }
+        const data = await res.json();
+
+        // Проверяем наличие ордера по цене среди бидов и асков
+        const all = [...data.bids, ...data.asks];
+        const match = all.find(([p]) => p === order.price);
+
+        // Определяем сторону ордера — бид или аск
+        const isBid = data.bids.some(([p]) => p === order.price);
+        const relevant = (isBid ? data.bids : data.asks)
+          .map(([p, q]) => {
+            const price = parseFloat(p), qty = parseFloat(q);
+            return { price: p, qty, volume: qty * price };
+          })
+          .sort((a, b) => b.volume - a.volume)
+          .slice(0, 5);
+
+        const minVolume = relevant.length ? Math.min(...relevant.map(r => r.volume)) : 0;
+
+        if (!match || parseFloat(match[1]) * parseFloat(match[0]) < minVolume) {
+          if (order.status !== 'исчез') {
+            order.status = 'исчез';
+            if (alertEnabled) {
+              document.getElementById('alertSound').play().catch(() => {});
+              if (Notification.permission === 'granted') {
+                new Notification(`❗ Ордер исчез: ${order.symbol} по цене ${order.price}`);
+              }
+              showModal(`Ордер исчез: ${order.symbol} по цене ${order.price}`);
+            }
+          }
+        } else {
+          order.status = 'активен';
+          order.qty = parseFloat(match[1]);
+        }
+      } catch {
+        order.status = 'Ошибка';
+      }
+    }
+    saveTrackedOrders();
+    renderTrackedOrders();
+  }
+
+  function startMonitoring() {
+    if (monitorInterval) clearInterval(monitorInterval);
+    monitorInterval = setInterval(monitorOrders, 5000);
+  }
+
+  function enableAlerts() {
+    alertEnabled = true;
+    const audio = document.getElementById('alertSound');
+    audio.play().catch(() => {});
+    if (Notification.permission !== 'granted') {
+      Notification.requestPermission();
+    }
+    document.getElementById('status').textContent = 'Оповещения включены';
+  }
+
+  window.onload = () => {
+    loadTrackedOrdersFromStorage();
+    renderTrackedOrders();
+    startMonitoring();
+
+    const savedCoin = localStorage.getItem('currentCoin');
+    if (savedCoin) {
+      document.getElementById('coinInput').value = savedCoin.replace('USDT','');
+      loadOrderbook();
+    }
+  };
+</script>
+
+</body>
+</html>
